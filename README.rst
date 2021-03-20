@@ -2,6 +2,9 @@
    :target: https://travis-ci.org/eng-tools/liquepy
    :alt: Testing Status
 
+.. image:: https://circleci.com/gh/eng-tools/liquepy.svg?style=svg
+    :target: https://circleci.com/gh/eng-tools/liquepy
+
 .. image:: https://img.shields.io/pypi/v/liquepy.svg
    :target: https://pypi.python.org/pypi/liquepy
    :alt: PyPi version
@@ -43,6 +46,14 @@ Installation
 
     pip install liquepy
 
+Optional modules (`sra`, `fig`, `spatial`) require large third-party dependencies and therefore do
+not import unless dependencies are satisfied.
+
+to install all dependencies for these optional modules run (example for installing `sra` dependencies)
+
+.. code:: bash
+
+    pip install liquepy[sra]
 
 Contributors
 ============

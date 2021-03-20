@@ -1,8 +1,9 @@
-import math
 import numpy as np
-from geographiclib.geodesic import Geodesic  # TODO: deal with this requirement
-from scipy.spatial import cKDTree
-from collections import OrderedDict
+try:
+    from geographiclib.geodesic import Geodesic
+except ImportError as e:
+    raise ImportError(e)
+from liquepy._spatial_models import Coords
 
 
 def _dist_wgs84_tup(coords_0, coords_1):
@@ -17,8 +18,8 @@ def calc_dist_wgs84(coords0, coords1):
 
     Parameters
     ----------
-    coords0: Coords
-    coords1: Coords
+    coords0: liquepy.spatial.models.Coords
+    coords1: liquepy.spatial.models.Coords
 
     Returns
     -------
@@ -34,8 +35,8 @@ def calc_bearing_wgs84(coords0, coords1):
 
     Parameters
     ----------
-    coords0: Coords
-    coords1: Coords
+    coords0: liquepy.spatial.models.Coords
+    coords1: liquepy.spatial.models.Coords
 
     Returns
     -------
@@ -99,8 +100,8 @@ def calc_line_offset(line, coords):
 
     Parameters
     ----------
-    line: Line
-    coords: Coords
+    line: liquepy.spatial.Line
+    coords: liquepy.spatial.models.Coords
 
     Returns
     -------
@@ -117,8 +118,8 @@ def calc_line_off_dir(line, coords):
 
     Parameters
     ----------
-    line: Line
-    coords: Coords
+    line: liquepy.spatial.Line
+    coords: liquepy.spatial.models.Coords
 
     Returns
     -------
@@ -167,8 +168,8 @@ def calc_proj_line_dist(line, coords):
 
     Parameters
     ----------
-    line: Line
-    coords: Coords
+    line: liquepy.spatial.Line
+    coords: liquepy.spatial.models.Coords
 
     Returns
     -------
@@ -185,61 +186,16 @@ def get_coords_at_dist(coords0, bearing, dist):
 
     Parameters
     ----------
-    coords0: Coords
+    coords0: liquepy.spatial.models.Coords
     bearing: float
     dist: float
 
     Returns
     -------
-    Coords
+    liquepy.spatial.models.Coords
     """
     g = Geodesic.WGS84.Direct(coords0.lat, coords0.lon, bearing, dist)
     return Coords(g['lat2'], g['lon2'])
-
-
-class Coords(object):
-
-    def __init__(self, lat=None, lon=None):
-        """
-        A Coordinate object
-
-        Parameters
-        ----------
-        lat
-        lon
-        """
-        self.lat = lat
-        self.lon = lon
-
-    def to_dict(self):
-        return OrderedDict([('lat', self.lat), ('lon', self.lon)])
-
-    def __repr__(self):
-        return "Coord({0}, {1})".format(self.lat, self.lon)
-
-    def __str__(self):
-        return "Coord({0}, {1})".format(self.lat, self.lon)
-
-    @property
-    def as_tuple(self):
-        return self.lat, self.lon
-
-
-class Line(object):
-    def __init__(self, coords0, coords1):
-        self.coords0 = coords0
-        self.coords1 = coords1
-
-    def calc_offset(self, coords):
-        return calc_line_offset(self, coords)
-
-    @property
-    def dist(self):
-        return calc_dist_wgs84(self.coords0, self.coords1)
-
-    @property
-    def bearing(self):
-        return calc_bearing_wgs84(self.coords0, self.coords1)
 
 
 def compute_idw(xy_vals, z_vals, new_xys, num_near=6, eps=0.0, pow_dist=1, weights=None, kd_leafsize=10):
@@ -268,6 +224,7 @@ def compute_idw(xy_vals, z_vals, new_xys, num_near=6, eps=0.0, pow_dist=1, weigh
     -------
 
     """
+    from scipy.spatial import cKDTree
     kd_tree = cKDTree(xy_vals, leafsize=kd_leafsize)  # build nearest neighbour tree
     new_xys = np.asarray(new_xys)
     distances, tree_indy = kd_tree.query(new_xys, k=num_near, eps=eps)
@@ -288,3 +245,30 @@ def compute_idw_w_coords(coords, z_vals, new_coords, ref_coord=None, num_near=6,
     xy_vals = coords
     new_xys = new_coords
     return compute_idw(xy_vals, z_vals, new_xys, num_near=num_near, eps=eps, pow_dist=pow_dist, weights=weights, kd_leafsize=kd_leafsize)
+
+
+class Line(object):
+    def __init__(self, coords0, coords1):
+        """
+        A line in WGS84 coordinate space
+
+        Parameters
+        ----------
+        coords0: Coords object
+            Coordinates of start of line
+        coords1: Coords object
+            Coordinates of end of line
+        """
+        self.coords0 = coords0
+        self.coords1 = coords1
+
+    def calc_offset(self, coords):
+        return calc_line_offset(self, coords)
+
+    @property
+    def dist(self):
+        return calc_dist_wgs84(self.coords0, self.coords1)
+
+    @property
+    def bearing(self):
+        return calc_bearing_wgs84(self.coords0, self.coords1)

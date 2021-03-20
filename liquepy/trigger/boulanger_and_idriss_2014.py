@@ -1,6 +1,7 @@
 import numpy as np
 from liquepy.exceptions import deprecation
 import sfsimodels as sm
+from liquepy.field import CPT
 
 
 def calc_void_ratio(unit_dry_weight, specific_gravity, pw):
@@ -136,7 +137,7 @@ def calc_csr(sigma_veff, sigma_v, pga, rd, gwl, depth):
     """
     Cyclic stress ratio from CPT, Eq 2.2,
     """
-    return np.where(depth <= gwl, 2, 0.65 * (sigma_v / sigma_veff) * rd * pga)
+    return 0.65 * (sigma_v / sigma_veff) * rd * pga
 
 
 def calc_cn_values(m, sigma_veff):
@@ -169,17 +170,44 @@ def calc_q_c1n(q_c, c_n):
     return q_c1n
 
 
-def calc_crr_m7p5_from_qc1ncs(q_c1n_cs):
+def calc_crr_m7p5_from_qc1ncs(q_c1n_cs, c_0=2.8):
+    """
+    Calculation of cyclic resistance ratio for Magnitude 7.5 earthquake
+
+    Parameters
+    ----------
+    q_c1n_cs: float or array_like
+        Clean-sand equivalent, normalised cone tip resistance
+    c_0: float (default=2.8)
+        Empirical fitting parameter.
+         - 2.8=16th percentile (commonly used)
+         - 2.6=median response
+
+    Returns
+    -------
+
+    """
     return np.exp((q_c1n_cs / 113) + ((q_c1n_cs / 1000) ** 2) -
-                        ((q_c1n_cs / 140) ** 3) + ((q_c1n_cs / 137) ** 4) - 2.8)
+                        ((q_c1n_cs / 140) ** 3) + ((q_c1n_cs / 137) ** 4) - c_0)
 
 
-def calc_crr_m7p5_from_qc1ncs_capped(q_c1n_cs, gwl, depth, i_c, i_c_limit=2.6):
+def calc_crr_n15_from_qc1ncs(q_c1ncs, c_0=2.8):
+    crr_m7p5 = calc_crr_m7p5_from_qc1ncs(q_c1ncs, c_0=c_0)
+    msf_m = 1.09 + (q_c1ncs / 180) ** 3
+    msf_max = np.clip(msf_m, None, 2.2)
+    b = calc_b_from_msf_max_bi2014(msf_max)
+    n_m7p5 = calc_n_cycles_at_m7p5_bi2014(b)
+    n_cyc_bi2014 = 15
+    msf = (n_m7p5 / n_cyc_bi2014) ** b
+    return msf * crr_m7p5
+
+
+def calc_crr_m7p5_from_qc1ncs_capped(q_c1n_cs, gwl, depth, i_c, i_c_limit=2.6, c_0=2.8):
     """
     cyclic resistance from CPT, Eq. 2.24
     it's not possible to have liquefaction above water table
     """
-    crr_values = calc_crr_m7p5_from_qc1ncs(q_c1n_cs)
+    crr_values = calc_crr_m7p5_from_qc1ncs(q_c1n_cs, c_0)
     crr_tent = np.where(depth < gwl, 4, crr_values)
     return np.where(i_c <= i_c_limit, crr_tent, 4.)
 
@@ -299,11 +327,12 @@ def _calc_dependent_variables(sigma_v, sigma_veff, q_c, f_s, p_a, q_t, cfc):
             if abs(q_c1n[dd] - temp_q_c1n) < 0.00001 and n_val_stable:
                 break
             temp_q_c1n = q_c1n[dd]
-    return q_c1n_cs, q_c1n, fines_content, i_c, big_q
+    return q_c1n_cs, q_c1n, fines_content, i_c, big_q, ft_values
 
 
-class BoulangerIdriss2014(object):
-    def __init__(self, depth, q_c, f_s, u_2, cpt_gwl=None, gwl=None, pga=0.25, m_w=None, a_ratio=0.8, cfc=0.0, **kwargs):
+class BoulangerIdriss2014CPT(object):
+
+    def __init__(self, cpt, gwl=None, pga=0.25, m_w=None, cfc=0.0, **kwargs):
         """
         Performs the Boulanger and Idriss triggering procedure for a CPT profile
 
@@ -311,14 +340,7 @@ class BoulangerIdriss2014(object):
 
         Parameters
         ----------
-        depth: array_like m,
-            depths measured downwards from surface
-        q_c: array_like kPa,
-            cone tip resistance
-        f_s: array_like kPa,
-            skin friction
-        u_2: array_like kPa,
-            water pressure beneath cone tip
+
         gwl: float, m,
             ground water level below the surface
         pga: float, g,
@@ -345,12 +367,13 @@ class BoulangerIdriss2014(object):
         i_c_limit = kwargs.get("i_c_limit", 2.6)
         self.s_g = kwargs.get("s_g", 2.65)
         self.s_g_water = kwargs.get("s_g_water", 1.0)
-        p_a = kwargs.get("p_a", 101.)  # kPa
+        self.p_a = kwargs.get("p_a", 101.)  # kPa
+        self.c_0 = kwargs.get("c_0", 2.8)
         saturation = kwargs.get("saturation", None)
         unit_wt_method = kwargs.get("unit_wt_method", "robertson2009")
         gamma_predrill = kwargs.get("gamma_predrill", 17.0)
-        if gwl is None and cpt_gwl is not None:
-            gwl = cpt_gwl
+        if gwl is None and cpt.gwl is not None:
+            gwl = cpt.gwl
 
         if m_w is None:
             if magnitude is None:
@@ -362,29 +385,30 @@ class BoulangerIdriss2014(object):
             self.m_w = m_w
 
         unit_water_wt = self.s_g_water * 9.8
-        self.npts = len(depth)
-        self.depth = depth
-        self.q_c = q_c
-        self.f_s = f_s
-        self.u_2 = u_2
+        self.npts = len(cpt.depth)
+        self.depth = cpt.depth
+        self.cpt = cpt
+        # self.q_c = cpt.q_c
+        # self.f_s = cpt.f_s
+        # self.u_2 = cpt.u_2
         self.gwl = gwl
         self.pga = pga
-        self.a_ratio = a_ratio
-        if a_ratio is None:
+        self.a_ratio = cpt.a_ratio
+        if cpt.a_ratio is None:
             self.a_ratio = 0.8
         self.i_c_limit = i_c_limit
 
         self.cfc = cfc  # parameter of fines content, eq 2.29
-        self.q_t = calc_qt(self.q_c, self.a_ratio, self.u_2)  # kPa
+        self.q_t = calc_qt(self.cpt.q_c, self.a_ratio, self.cpt.u_2)  # kPa
 
         if saturation is None:
             self.saturation = np.where(self.depth < self.gwl, 0, 1)
         else:
             self.saturation = saturation
         if unit_wt_method == "robertson2009":
-            self.unit_wt = calc_unit_dry_weight(self.f_s, self.q_t, p_a, unit_water_wt)
+            self.unit_wt = calc_unit_dry_weight(self.cpt.f_s, self.q_t, self.p_a, unit_water_wt)
         elif unit_wt_method == 'void_ratio':
-            self.unit_dry_wt = calc_unit_dry_weight(self.f_s, self.q_t, p_a, unit_water_wt)
+            self.unit_dry_wt = calc_unit_dry_weight(self.cpt.f_s, self.q_t, self.p_a, unit_water_wt)
             self.e_curr = calc_void_ratio(self.unit_dry_wt, self.s_g, pw=unit_water_wt)
             self.unit_wt = calc_unit_weight(self.e_curr, self.s_g, self.saturation, pw=unit_water_wt)
         else:
@@ -395,22 +419,25 @@ class BoulangerIdriss2014(object):
         self.sigma_veff = calc_sigma_veff(self.sigma_v, self.pore_pressure)
         if self.sigma_veff[0] == 0.0:
             self.sigma_veff[0] = 1.0e-10
-        self.rd = calc_rd(depth, self.m_w)
+        self.rd = calc_rd(self.depth, self.m_w)
 
-        self.q_c1n_cs, self.q_c1n, self.fines_content, self.i_c, self.big_q = _calc_dependent_variables(self.sigma_v, self.sigma_veff, q_c,
-                                                                                            f_s, p_a,
+        self.q_c1n_cs, self.q_c1n, self.fines_content, self.i_c, self.big_q, self.big_f = _calc_dependent_variables(self.sigma_v,
+                                                                                                        self.sigma_veff,
+                                                                                                        self.cpt.q_c,
+                                                                                            self.cpt.f_s, self.p_a,
                                                                                             self.q_t,
                                                                                             self.cfc)
 
-        np.clip(self.q_c1n_cs, None, 210., out=self.q_c1n_cs)
+        np.clip(self.q_c1n_cs, None, 211., out=self.q_c1n_cs)  # pg 11 of BI2014 report
         self.k_sigma = calc_k_sigma(self.sigma_veff, self.q_c1n_cs)
         self.msf = calc_msf(self.m_w, self.q_c1n_cs)
-        self.csr = calc_csr(self.sigma_veff, self.sigma_v, pga, self.rd, gwl, depth)
-        self.crr_m7p5 = calc_crr_m7p5_from_qc1ncs_capped(self.q_c1n_cs, gwl, depth, self.i_c, self.i_c_limit)
+        self.csr = calc_csr(self.sigma_veff, self.sigma_v, pga, self.rd, gwl, self.depth)
+        self.crr_m7p5 = calc_crr_m7p5_from_qc1ncs_capped(self.q_c1n_cs, gwl, self.depth, self.i_c, self.i_c_limit, self.c_0)
         self.crr = crr_m(self.k_sigma, self.msf, self.crr_m7p5)  # CRR at set magnitude
         fs_unlimited = self.crr / self.csr
         # fs_fines_limited = np.where(self.fines_content > 71, 2.0, fs_unlimited)  # based on I_c=2.6
-        self.factor_of_safety = np.where(fs_unlimited > 2, 2, fs_unlimited)
+        fos = np.where(fs_unlimited > 2, 2, fs_unlimited)
+        self.factor_of_safety = np.where(self.i_c <= self.i_c_limit, fos, 2.25)
 
     @property
     def gammas(self):
@@ -423,14 +450,33 @@ class BoulangerIdriss2014(object):
         return self.m_w
 
 
-class BoulangerIdriss2014CPT(BoulangerIdriss2014):
-    def __init__(self, cpt, pga=0.25, m_w=None, gwl=None, a_ratio=0.8, cfc=0.0, **kwargs):
-        self.cpt = cpt
-        cpt_gwl = cpt.gwl
+class BoulangerIdriss2014(BoulangerIdriss2014CPT):
+
+    def __init__(self, depth, q_c, f_s, u_2, cpt_gwl=None, pga=0.25, m_w=None, gwl=None, a_ratio=0.8, cfc=0.0, **kwargs):
+        """
+         depth: array_like m,
+            depths measured downwards from surface
+        q_c: array_like kPa,
+            cone tip resistance
+        f_s: array_like kPa,
+            skin friction
+        u_2: array_like kPa,
+            water pressure beneath cone tip
+        Parameters
+        ----------
+        cpt
+        pga
+        m_w
+        gwl
+        a_ratio
+        cfc
+        kwargs
+        """
+
         if gwl is None:
             gwl = cpt_gwl
-        super(BoulangerIdriss2014CPT, self).__init__(cpt.depth, cpt.q_c, cpt.f_s, cpt.u_2, cpt_gwl, gwl=gwl, pga=pga, m_w=m_w,
-                                                     a_ratio=a_ratio, cfc=cfc, **kwargs)
+        cpt = CPT(depth, q_c, f_s, u_2, gwl, a_ratio=a_ratio)
+        super(BoulangerIdriss2014CPT, self).__init__(cpt, gwl=gwl, pga=pga, m_w=m_w, cfc=cfc, **kwargs)
 
 
 class BoulangerIdriss2014SoilProfile(object):  # TODO: validate this properly
@@ -468,7 +514,7 @@ class BoulangerIdriss2014SoilProfile(object):  # TODO: validate this properly
         self.rd = calc_rd(self.depth, self.m_w)
         crr_unlimited = np.interp(self.depth, split_depths, self.sp.split['csr_n15'])
         self.crr_m7p5 = np.where(self.depth <= self.gwl, 4, crr_unlimited)
-        self.q_c1n_cs = calc_qc_1ncs_from_crr_m7p5(self.crr_m7p5)
+        self.q_c1n_cs = calc_q_c1n_cs_from_crr_m7p5(self.crr_m7p5)
         self.k_sigma = calc_k_sigma(self.sigma_veff, self.q_c1n_cs)
         self.msf = calc_msf(self.m_w, self.q_c1n_cs)
         self.crr = crr_m(self.k_sigma, self.msf, self.crr_m7p5)  # CRR at set magnitude
@@ -477,7 +523,8 @@ class BoulangerIdriss2014SoilProfile(object):  # TODO: validate this properly
         self.factor_of_safety = np.where(fs_unlimited > 2, 2, fs_unlimited)
 
 
-def run_bi2014(cpt, pga, m_w, gwl=None, cfc=0.0, **kwargs):
+def run_bi2014(cpt, pga, m_w, gwl=None, p_a=101., cfc=0.0, i_c_limit=2.6, gamma_predrill=17.0, c_0=2.8,
+               unit_wt_method='robertson2009', s_g=2.65, s_g_water=1.0, saturation=None):
     """
     Runs the Boulanger and Idriss (2014) triggering method.
 
@@ -491,37 +538,63 @@ def run_bi2014(cpt, pga, m_w, gwl=None, cfc=0.0, **kwargs):
         Earthquake magnitude
     gwl: float, m,
         depth to ground water from surface at time of earthquake
+    p_a: float, kPa, default=101
+        Atmospheric pressure
     cfc: float, -, default=0.0
         Fines content correction factor for Eq 2.29
     i_c_limit: float, -, default=2.6
         Limit of liquefiable material
+    gamma_predrill: float, kN/m3, default=17.0
+        Unit weight of soil above pre-drill depth
+    c_0: float, -, default=2.8
+        Factor that adjusts the CRR-vs-qc1ncs relationship
+    unit_wt_method: str, -, default='robertson2009'
+        Method used to determine unit weight
     s_g: float or array_like, -, default=2.65
         Specific gravity
     s_g_water: float, -, default=1.0
-            Specific gravity of water
-    p_a: float, kPa, default=101
-        Atmospheric pressure
-    gamma_predrill: float, kN/m3, default=17.0
-        Unit weight of pre-drilled material
+        Specific gravity of water
+    saturation: array_like or None
+        Saturation ratio for each depth increment
 
     Returns
     -------
-    BoulangerIdriss2014()
+    BoulangerIdriss2014CPT()
     """
-    i_c_limit = kwargs.get("i_c_limit", 2.6)
-    s_g = kwargs.get("s_g", 2.65)
-    s_g_water = kwargs.get("s_g_water", 1.0)
-    p_a = kwargs.get("p_a", 101.)  # kPa
-    saturation = kwargs.get("saturation", None)
-    unit_wt_method = kwargs.get("unit_wt_method", "robertson2009")
-    gamma_predrill = kwargs.get("gamma_predrill", 17.0)
 
-    return BoulangerIdriss2014CPT(cpt, gwl=gwl, pga=pga, m_w=m_w,
-                               a_ratio=cpt.a_ratio, cfc=cfc, i_c_limit=i_c_limit, s_g=s_g, s_g_water=s_g_water, p_a=p_a,
-                               saturation=saturation, unit_wt_method=unit_wt_method, gamma_predrill=gamma_predrill)
+    return BoulangerIdriss2014CPT(cpt, gwl=gwl, pga=pga, m_w=m_w, cfc=cfc, i_c_limit=i_c_limit, s_g=s_g,
+                                  s_g_water=s_g_water, p_a=p_a,
+                                  saturation=saturation, unit_wt_method=unit_wt_method, gamma_predrill=gamma_predrill,
+                                  c_0=c_0)
 
 
-def calc_qc_1ncs_from_crr_m7p5(crr_7p5):
+def _invert_crr_formula(a, b, c, d, e):
+
+    p = (8 * a * c - 3 * b ** 2) / (8 * a ** 2)
+    q = (b ** 3 - 4 * a * b * c + 8 * d * (a ** 2)) / (8 * a ** 3)
+    delta_zero = c ** 2 - 3 * b * d + 12 * a * e
+    delta_one = 2 * c ** 3 - 9 * b * c * d + 27 * e * (b ** 2) + 27 * a * (d ** 2) - 72 * a * c * e
+    big_q = ((delta_one + (delta_one ** 2 - 4 * delta_zero ** 3) ** 0.5) / 2) ** (1/3)
+    big_s = 0.5 * (- 2/3 * p + 1/(3 * a) * (big_q + (delta_zero / big_q))) ** 0.5
+    big_a = (- 4 * big_s ** 2 - 2 * p + q/big_s)
+    big_b = (- 4 * big_s ** 2 - 2 * p - q/big_s)
+    big_c = - b/(4 * a)
+
+    # Solutions
+    x1 = big_c - big_s + 0.5 * big_a ** 0.5
+    # x2 = C - big_s - 0.5 * big_a ** 0.5
+    x2 = -1  # q_c1ncs would be less than zero
+
+    import warnings  # These solutions are complex for negative
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        x3 = big_c + big_s + 0.5 * big_b ** 0.5
+        x4 = big_c + big_s - 0.5 * big_b ** 0.5
+
+        return np.where(big_b < 0, np.where(x1 < 0, x2, x1), np.where(x3 < 0, x4, x3))
+
+
+def calc_q_c1n_cs_from_crr_m7p5(crr_7p5, c_0=2.8):
     """
     Solves the closed form solution to a quartic to invert the CRR_7p5-vs-q_c1n_cs relationship
 
@@ -529,42 +602,148 @@ def calc_qc_1ncs_from_crr_m7p5(crr_7p5):
     ----------
     crr_7p5: float or array_like
         values of cyclic resistance ratio at m_w 7.5
+    c_0: float (default=2.8)
+        Empirical fitting parameter.
+         - 2.8=16th percentile (commonly used)
+         - 2.6=median response
     Returns
     -------
     float or array_like
         value of normalised cone tip resistance corrected to clean sand behaviour
     """
-    x = 5
     a = (1 / 137) ** 4
     b = - (1 / 140) ** 3
     c = (1 / 1000) ** 2
     d = (1 / 113)
-    e = - (np.log(crr_7p5) + 2.8)
+    e = - (np.log(crr_7p5) + c_0)
+    return _invert_crr_formula(a, b, c, d, e)
 
-    p = (8 * a * c - 3 * b ** 2) / (8 * a ** 2)
-    q = (b ** 3 - 4 * a *b *c + 8 * d * (a ** 2)) / (8 * a ** 3)
-    delta_zero = c ** 2 - 3 * b * d + 12 * a * e
-    delta_one = 2 * c ** 3 - 9 * b * c * d + 27 * e * (b ** 2) + 27 * a * (d ** 2) - 72 * a * c * e
-    big_q = ((delta_one + (delta_one ** 2 - 4 * delta_zero ** 3) ** 0.5) / 2) ** (1/3)
-    big_s = 0.5 * (- 2/3 * p + 1/(3 * a) * (big_q + (delta_zero / big_q))) ** 0.5
-    big_a = (- 4 * big_s ** 2 - 2 * p + q/big_s)
-    big_b = (- 4 * big_s ** 2 - 2 * p - q/big_s)
-    C = - b/(4 * a)
 
-    # Solutions
-    x1 = C - big_s + 0.5 * big_a ** 0.5
-    # x2 = C - big_s - 0.5 * big_a ** 0.5
-    x2 = -1  # q_c1ncs would be less than zero
+def calc_n1_60cs_from_crr_m7p5(crr_7p5, c_0=2.8):
+    """
+    Solves the closed form solution to a quartic to invert the CRR_7p5-vs-N1_60_cs relationship
 
-    import warnings  # These solutions are complex for negative
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        x3 = C + big_s + 0.5 * big_b ** 0.5
-        x4 = C + big_s - 0.5 * big_b ** 0.5
+    Parameters
+    ----------
+    crr_7p5: float or array_like
+        values of cyclic resistance ratio at m_w 7.5
+    c_0: float (default=2.8)
+        Empirical fitting parameter.
+         - 2.8=16th percentile (commonly used)
+         - 2.6=median response
+    Returns
+    -------
+    float or array_like
+        value of normalised blow-count corrected to clean sand behaviour
+    """
+    a = (1 / 25.4) ** 4
+    b = - (1 / 23.6) ** 3
+    c = (1 / 126) ** 2
+    d = (1 / 14.1)
+    e = - (np.log(crr_7p5) + c_0)
+    return _invert_crr_formula(a, b, c, d, e)
 
-        return np.where(big_b < 0, np.where(x1 < 0, x2, x1), np.where(x3 < 0, x4, x3))
+
+def calc_qc_1ncs_from_crr_m7p5(crr_7p5, c_0=2.8):
+    deprecation("Use calc_q_c1n_cs_from_crr_m7p5")
+    return calc_q_c1n_cs_from_crr_m7p5(crr_7p5, c_0)
 
 
 def calculate_qc_1ncs_from_crr_7p5(crr_7p5):
-    deprecation("Use calc_qc_1ncs_from_crr_m7p5")
+    deprecation("Use calc_q_c1n_cs_from_crr_m7p5")
     return calc_qc_1ncs_from_crr_m7p5(crr_7p5)
+
+
+def calc_n_cycles_at_m7p5_bi2014(b):
+    """
+    Number of equivalent cycles for Magnitude 7.5 from Fig A.15 in BI2014
+
+    :param b:
+    :return:
+    """
+    b_vals = [0.060, 0.063, 0.068, 0.072, 0.078, 0.086, 0.095, 0.110, 0.129, 0.148,
+              0.168, 0.189, 0.213, 0.235, 0.253, 0.273, 0.310, 0.333, 0.372, 0.400]
+    n_cyc = [950.789, 628.731, 405.756, 278.274, 197.931, 121.658, 77.552, 47.081, 30.742, 22.947,
+             18.878, 16.503, 15.519, 14.593, 14.235, 14.054, 14.384, 14.374, 14.710, 15.060]
+    return np.interp(b, b_vals, n_cyc)
+
+
+def calc_b_from_msf_max_bi2014(msf_max):
+    """
+    Equivalent b value for a given magnitude scaling factor from Fig A.16 in BI2014
+
+    Where b is the power coefficient for the CSR-vs-n_cycles liquefaction resistance relationship
+
+    :param msf_max:
+    :return:
+    """
+    b_vals = [0.080, 0.101, 0.121, 0.147, 0.170, 0.191, 0.211, 0.250, 0.290, 0.312, 0.333, 0.353, 0.374, 0.399]
+    msf_max_vals = [1.000, 1.019, 1.045, 1.084, 1.130, 1.184, 1.242, 1.373, 1.540, 1.651, 1.768, 1.891, 2.025, 2.215]
+    return np.interp(msf_max, msf_max_vals, b_vals)
+
+
+def calc_lrc_from_qc1ncs_bi2014(q_c1n_cs, n_cycles):
+    crr_m7p5 = calc_crr_m7p5_from_qc1ncs(q_c1n_cs)
+    msf_m = 1.09 + (q_c1n_cs / 180) ** 3
+    msf_max = np.clip(msf_m, None, 2.2)
+    b = calc_b_from_msf_max_bi2014(msf_max)
+    n_m7p5 = calc_n_cycles_at_m7p5_bi2014(b)
+    return (n_m7p5 / n_cycles) ** b * crr_m7p5
+
+
+def calc_k_sigma_w_n1_60cs(sigma_eff, n1_60cs, pa=100):
+    """
+    Overburden correction factor, K_sigma
+
+    Equation 2.16a
+
+    Parameters
+    ----------
+    sigma_eff: float or array_like
+        Vertical effective stress
+    n1_60cs: float or array_like
+        Clean-sand equivalent, normalised SPT blow count
+    pa: float
+        Atmospheric pressure in kPa
+
+    """
+    c_sigma = 1. / (18.9 - 2.55 * np.sqrt(n1_60cs))
+    c_sigma = np.clip(c_sigma, None, 0.3)
+    return np.clip(1 - c_sigma * np.log(sigma_eff / pa), None, 1.1)
+
+
+def calc_crr_m7p5_from_n1_60cs(n1_60cs, c_0=2.8):
+    """
+    Calculation of cyclic resistance ratio for Magnitude 7.5 earthquake from SPT
+
+    Parameters
+    ----------
+    n1_60cs: float or array_like
+        Clean-sand equivalent, normalised SPT blow count
+    c_0: float (default=2.8)
+        Empirical fitting parameter.
+         - 2.8=16th percentile (commonly used)
+         - 2.6=median response
+
+    Returns
+    -------
+
+    """
+    return np.exp((n1_60cs / 14.1) + ((n1_60cs / 126) ** 2) - ((n1_60cs / 23.6) ** 3) + ((n1_60cs / 25.4) ** 4) - c_0)
+
+
+def calc_crr_n15_from_n1_60cs(n1_60cs, c_0=2.8):
+    crr_m7p5 = calc_crr_m7p5_from_n1_60cs(n1_60cs, c_0=c_0)
+    msf_m = 1.09 + (n1_60cs / 31.5) ** 2
+    msf_max = np.clip(msf_m, None, 2.2)
+    b = calc_b_from_msf_max_bi2014(msf_max)
+    n_m7p5 = calc_n_cycles_at_m7p5_bi2014(b)
+    n_cyc_bi2014 = 15
+    msf = (n_m7p5 / n_cyc_bi2014) ** b
+    return msf * crr_m7p5
+
+if __name__ == '__main__':
+    n1_60_cs_values = 3.
+    crr_values = calc_crr_m7p5_from_n1_60cs(n1_60_cs_values, c_0=2.6)
+    n1_60_cs_back = calc_n1_60cs_from_crr_m7p5(crr_values, c_0=2.6)
+    print(n1_60_cs_back)

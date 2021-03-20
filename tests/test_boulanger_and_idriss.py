@@ -22,10 +22,10 @@ def test_compare_fos_to_previous_version():
     cpt.a_ratio = 0.8
     bi2014 = liquepy.trigger.run_bi2014(cpt, pga=0.25, m_w=7.5, gwl=cpt.gwl, unit_wt_method='robertson2009')
     factor_safety_values = bi2014.factor_of_safety
-    new_version = "0p5p5"  # uncomment to generate new version if changed
+    new_version = "0p6p10"  # uncomment to generate new version if changed
     np.savetxt(TEST_DATA_DIR + "standard_1_fos_lq%s.csv" % new_version, factor_safety_values)
 
-    fos_expected = np.loadtxt(TEST_DATA_DIR + "standard_1_fos_lq0p5p5.csv")
+    fos_expected = np.loadtxt(TEST_DATA_DIR + "standard_1_fos_lq0p6p10.csv")
     assert np.isclose(fos_expected, factor_safety_values).all()
 
 
@@ -116,6 +116,9 @@ def test_crr_7p5_from_cpt():
     expected_crr_7p5 = 0.101
     crr = bim14.calc_crr_m7p5_from_qc1ncs_capped(q_c1n_cs, gwl, depth, i_c=1.8)
     assert np.isclose(crr.astype(float), expected_crr_7p5, rtol=0.011)
+    assert bim14.calc_crr_m7p5_from_qc1ncs_capped(q_c1n_cs, gwl=6., depth=depth, i_c=1.8) == 4.0
+    assert bim14.calc_crr_m7p5_from_qc1ncs_capped(q_c1n_cs, gwl=1., depth=depth, i_c=2.7) == 4.0
+    assert bim14.calc_crr_m7p5_from_qc1ncs_capped(q_c1n_cs, gwl=1., depth=depth, i_c=2.5, i_c_limit=2.4) == 4.0
 
 
 def test_crr_m():
@@ -251,9 +254,22 @@ def test_calculate_ic():
 def test_calculate_qc_1ncs_from_crr_7p5():
     q_c1n_cs_values = np.linspace(50, 220, 100)
     crr_values = bim14.calc_crr_m7p5_from_qc1ncs_capped(q_c1n_cs_values, depth=10, gwl=0, i_c=1.8)
-    q_c1n_cs_back = bim14.calc_qc_1ncs_from_crr_m7p5(crr_values)
+    q_c1n_cs_back = bim14.calc_q_c1n_cs_from_crr_m7p5(crr_values)
     error = np.sum(abs(q_c1n_cs_values - q_c1n_cs_back))
     assert error < 0.01, error
+    q_c1n_cs_values = np.linspace(50, 220, 100)
+    crr_values = bim14.calc_crr_m7p5_from_qc1ncs(q_c1n_cs_values, c_0=2.6)
+    q_c1n_cs_back = bim14.calc_q_c1n_cs_from_crr_m7p5(crr_values, c_0=2.6)
+    error = np.sum(abs(q_c1n_cs_values - q_c1n_cs_back))
+    assert error < 0.01, error
+
+
+def test_calculate_n1_60cs_from_crr_7p5():
+    n1_60_cs_values = np.linspace(1, 25, 10)
+    crr_values = bim14.calc_crr_m7p5_from_n1_60cs(n1_60_cs_values, c_0=2.6)
+    n1_60_cs_back = bim14.calc_n1_60cs_from_crr_m7p5(crr_values, c_0=2.6)
+    error = np.sum(abs(n1_60_cs_values - n1_60_cs_back))
+    assert error < 0.001, error
 
 
 def test_handles_predrill():
@@ -270,6 +286,15 @@ def test_handles_predrill():
     sigma_v = liquepy.trigger.boulanger_and_idriss_2014.calc_sigma_v(depths, unit_wt)
     print(sigma_v)
     # bi2014 = liquepy.trigger.run_bi2014()
+
+
+def test_calc_crr_m7p5_from_n1_60cs():
+    crr = liquepy.trigger.boulanger_and_idriss_2014.calc_crr_m7p5_from_n1_60cs(3, c_0=2.8)
+    assert np.isclose(crr, 0.07513065), (crr, 0.07513065)  # v0.6.9+
+    crr = liquepy.trigger.boulanger_and_idriss_2014.calc_crr_m7p5_from_n1_60cs(15, c_0=2.8)
+    assert np.isclose(crr, 0.156119), (crr, 0.156119)  # v0.6.9+
+    crr = liquepy.trigger.boulanger_and_idriss_2014.calc_crr_m7p5_from_n1_60cs(3, c_0=2.6)
+    assert np.isclose(crr, 0.09176478), (crr, 0.09176478)  # v0.6.9+
 
 
 if __name__ == '__main__':

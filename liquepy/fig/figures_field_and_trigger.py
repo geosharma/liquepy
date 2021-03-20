@@ -1,17 +1,16 @@
-import matplotlib.pyplot as plt
-from matplotlib import patches as mpatches
 from collections import OrderedDict
-from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
 import itertools
 
 FS_VMIN = 0.5
-FS_VMAX = 1.750
+FS_VMAX = 1.75
+FS_VMAX_W_NONLIQ = 2.5
 FS_LOW_to_0p75 = (0.75, 0, 0)
 FS_0p75_to_1p0 = (0.95, 0, 0)
 FS_1p0_to_1p25 = (0.9, 0.4, 0.15)
 FS_1p25_to_1p5 = (1, 0.65, 0.25)
 FS_1p5_to_HIGH = (0.1, 0.6, 0.1)
+FS_NON_LIQ = (0.4, 0.4, 0.4)
 FS_COLORS = OrderedDict([
     ('FS_LOW_to_0p75', FS_LOW_to_0p75),  # dark red
     ('FS_0p75_to_1p0', FS_0p75_to_1p0),  # red
@@ -19,6 +18,17 @@ FS_COLORS = OrderedDict([
     ('FS_1p25_to_1p5', FS_1p25_to_1p5),  # orange
     ('FS_1p5_to_HIGH', FS_1p5_to_HIGH),  # green
 ])
+FS_COLORS_W_NONLIQ = OrderedDict([
+    ('FS_LOW_to_0p75', FS_LOW_to_0p75),  # dark red
+    ('FS_0p75_to_1p0', FS_0p75_to_1p0),  # red
+    ('FS_1p0_to_1p25', FS_1p0_to_1p25),  # dark orange
+    ('FS_1p25_to_1p5', FS_1p25_to_1p5),  # orange
+    ('FS_1p5_to_HIGH', FS_1p5_to_HIGH),  # green
+    ('FS_1p5_to_HIGH2', FS_1p5_to_HIGH),  # green
+    ('FS_1p5_to_HIGH2', FS_1p5_to_HIGH),  # green
+    ('FS_NON_LIQ', FS_NON_LIQ),  # green
+])
+
 
 IC_VMIN = 0.0
 IC_VMAX = 4.0
@@ -51,41 +61,84 @@ IC_COLORS = OrderedDict([
     ('Plastic silt', IC_P_silt),  # light grey
 ])
 
-FS_CMAP = LinearSegmentedColormap.from_list('mine', [FS_COLORS[cname] for cname in FS_COLORS], N=5)
+# Colors
+IC_ALT_GRAVEL = [154 / 255, 176 / 255, 187 / 255]
+IC_ALT_CS = [255 / 255, 246 / 255, 187 / 255]
+IC_ALT_SwFC = [218 / 255, 196 / 255, 77 / 255]
+IC_ALT_NP_silt = [223 / 255, 220 / 255, 151 / 255]
+IC_ALT_P_silt = [196 / 255, 148 / 255, 73 / 255]
+IC_ALT_COLORS = OrderedDict([
+    ('Gravel', IC_ALT_GRAVEL),  # yellow
+    ('Clean sand', IC_ALT_CS),  # light green
+    ('Sand with fines', IC_ALT_SwFC),  # light blue
+    ('Non-plastic silt', IC_ALT_NP_silt),  # light red
+    ('Plastic silt', IC_ALT_P_silt),  # light grey
+])
 
-_incs = (np.diff(IC_LIMITS) * 10).astype(int)
-_clist = list(itertools.chain(*[[IC_COLORS[cname]] * _incs[x] for x, cname in enumerate(IC_COLORS)]))
-IC_CMAP = LinearSegmentedColormap.from_list('mine', _clist, N=len(_clist))
-_clist = list(itertools.chain(*[[IC_COLORS_w_CONTRAST[cname]] * _incs[x] for x, cname in enumerate(IC_COLORS_w_CONTRAST)]))
-IC_CMAP_w_CONTRAST = LinearSegmentedColormap.from_list('mine', _clist, N=len(_clist))
+FS_CMAP = None
+FS_CMAP_W_NONLIQ = None
+IC_CMAP = None
+IC_CMAP_w_CONTRAST = None
 
 
-def add_ic_colours(subplot):
-    ic_limits = IC_LIMITS
-    # Colors
-    gravel = [154 / 255, 176 / 255, 187 / 255]
-    clean_sand = [255 / 255, 246 / 255, 187 / 255]
-    sand_w_fc = [218 / 255, 196 / 255, 77 / 255]
-    silty_sand = [223 / 255, 220 / 255, 151 / 255]
-    clay_silt = [196 / 255, 148 / 255, 73 / 255]
+def build_cmaps():
+    from matplotlib.colors import LinearSegmentedColormap  # Importing this is slow
+    global FS_CMAP
+    global FS_CMAP_W_NONLIQ
+    global IC_CMAP
+    global IC_CMAP_w_CONTRAST
+    FS_CMAP = LinearSegmentedColormap.from_list('fs', [FS_COLORS[cname] for cname in FS_COLORS], N=5)
+    FS_CMAP_W_NONLIQ = LinearSegmentedColormap.from_list('fs_w_nonliq', [FS_COLORS_W_NONLIQ[cname] for cname in FS_COLORS_W_NONLIQ], N=5)
+    _incs = np.round(np.diff(IC_LIMITS) * 10).astype(int)
+    _clist = list(itertools.chain(*[[IC_COLORS[cname]] * _incs[x] for x, cname in enumerate(IC_COLORS)]))
+    IC_CMAP = LinearSegmentedColormap.from_list('mine', _clist, N=len(_clist))
+    _clist = list(itertools.chain(*[[IC_COLORS_w_CONTRAST[cname]] * _incs[x] for x, cname in enumerate(IC_COLORS_w_CONTRAST)]))
+    IC_CMAP_w_CONTRAST = LinearSegmentedColormap.from_list('mine', _clist, N=len(_clist))
 
-    colours = [gravel, clean_sand, sand_w_fc, silty_sand, clay_silt,
-               (1, 1, 1)]
+def get_fs_cmap():
+    from matplotlib.colors import LinearSegmentedColormap  # Importing this is slow
+    return LinearSegmentedColormap.from_list('fs', [FS_COLORS[cname] for cname in FS_COLORS], N=5)
 
-    gravel_patch = mpatches.Patch(color=gravel, label='Gravel')
 
-    clean_sand_patch = mpatches.Patch(color=clean_sand, label='Clean Sand')
+def get_fs_w_nonliq_cmap():
+    from matplotlib.colors import LinearSegmentedColormap  # Importing this is slow
+    return LinearSegmentedColormap.from_list('fs_w_nonliq',
+                                             [FS_COLORS_W_NONLIQ[cname] for cname in FS_COLORS_W_NONLIQ], N=5)
 
-    silty_sand_patch = mpatches.Patch(color=silty_sand, label='Silty Sand')
+def get_ic_cmap():
+    from matplotlib.colors import LinearSegmentedColormap  # Importing this is slow
+    _incs = np.round(np.diff(IC_LIMITS) * 10).astype(int)
+    _clist = list(itertools.chain(*[[IC_COLORS[cname]] * _incs[x] for x, cname in enumerate(IC_COLORS)]))
+    return LinearSegmentedColormap.from_list('mine', _clist, N=len(_clist))
 
-    sand_w_fc_patch = mpatches.Patch(color=sand_w_fc, label='Sand with much Fines Content')
 
-    clay_silty_patch = mpatches.Patch(color=clay_silt, label='Clay-Silty/Not Liquefable')
+def get_ic_w_contrast_cmap():
+    from matplotlib.colors import LinearSegmentedColormap  # Importing this is slow
+    _incs = np.round(np.diff(IC_LIMITS) * 10).astype(int)
+    _clist = list(itertools.chain(*[[IC_COLORS_w_CONTRAST[cname]] * _incs[x]
+                                    for x, cname in enumerate(IC_COLORS_w_CONTRAST)]))
+    return LinearSegmentedColormap.from_list('mine', _clist, N=len(_clist))
 
-    # subplot.rc('legend', fontsize=9)
-    subplot.legend([gravel_patch, clean_sand_patch, silty_sand_patch, sand_w_fc_patch, clay_silty_patch,
-                (gravel_patch, clean_sand_patch, silty_sand_patch, sand_w_fc_patch, clay_silty_patch)],
-               ["Gravel", "Clean Sand", "Silty Sand", "Sand with FC", "Clay-Silty/\nNot Liq.", ], loc=0, prop={"size": 8})
+
+def add_ic_colours(subplot, col_dict='alt', ic_limits=None):
+    from matplotlib import patches as mpatches
+    if ic_limits is None:
+        ic_limits = IC_LIMITS
+
+    if col_dict == 'alt':
+        dd = IC_ALT_COLORS
+    elif col_dict == 'main':
+        dd = IC_COLORS
+    elif col_dict == 'con':
+        dd = IC_COLORS_w_CONTRAST
+    else:
+        dd = col_dict
+    colours = [dd[x] for x in dd]
+    colours.append((1, 1, 1))
+    patches = []
+    for col in dd:
+        patches.append(mpatches.Patch(color=dd[col], label=col))
+    subplot.legend(patches + [(patches)], list(dd), loc=0, prop={'size': 8})
 
     for i in range(len(ic_limits) - 1):
         subplot.axvspan(ic_limits[i], ic_limits[i + 1], alpha=1.0, color=colours[i])
@@ -96,14 +149,32 @@ def make_ic_plot(subplot):
     subplot.set_xlim([0, 3])
 
 
-def make_factor_of_safety_plot(subplot):
+def get_ic_legend_patches(col_dict):
+    from matplotlib import patches as mpatches
+    if col_dict == 'alt':
+        dd = IC_ALT_COLORS
+    elif col_dict == 'main':
+        dd = IC_COLORS
+    elif col_dict == 'con':
+        dd = IC_COLORS_w_CONTRAST
+    else:
+        dd = col_dict
+    legend_elements = []
+    patches = []
+    for col in dd:
+        patches.append(mpatches.Patch(color=dd[col], label=col))
+    return patches
+
+
+def make_factor_of_safety_plot(subplot, w_ic_lim=False):
     # add the Fs = 1 line
     subplot.axvspan(0., 0.75, alpha=0.5, color=FS_LOW_to_0p75)
     subplot.axvspan(0.75, 1.0, alpha=0.5, color=FS_0p75_to_1p0)
     subplot.axvspan(1.0, 1.25, alpha=0.5, color=FS_1p0_to_1p25)
     subplot.axvspan(1.25, 1.5, alpha=0.5, color=FS_1p25_to_1p5)
     subplot.axvspan(1.5, 2.0, alpha=0.5, color=FS_1p5_to_HIGH)
-    subplot.set_xlim([0, 2.1])
+    subplot.axvspan(2.0, 2.3, alpha=0.5, color=FS_NON_LIQ)
+    subplot.set_xlim([0, 2.3])
 
 
 def make_cpt_plots(sps, cpt, c="gray", x_origin=True, y_origin=True):
@@ -131,10 +202,9 @@ def make_cpt_plots(sps, cpt, c="gray", x_origin=True, y_origin=True):
     sps[0].set_xlabel("q_c [kPa]")
     sps[1].set_xlabel("f_s [kPa]")
     sps[2].set_xlabel("u_2 [kPa]")
-    plt.tight_layout()
 
 
-def make_bi2014_outputs_plot(sps, bi2014):
+def make_bi2014_outputs_plot(sps, bi2014, crr_cap=0.6):
 
     sps[0].plot(bi2014.pore_pressure, bi2014.depth, lw=1, c="b", label="Pore pressure")
     sps[0].plot(bi2014.sigma_v, bi2014.depth, lw=1, c="r", label="$\sigma_{v}$")
@@ -147,7 +217,7 @@ def make_bi2014_outputs_plot(sps, bi2014):
     # sps[1].legend()
     sps[1].set_xlabel("$I_c$")
 
-    sps[2].plot(bi2014.crr_m7p5, bi2014.depth, "o", lw=1, c="k", alpha=0.5, ms=3)
+    sps[2].plot(np.clip(bi2014.crr_m7p5, None, crr_cap), bi2014.depth, "o", lw=1, c="k", alpha=0.5, ms=3)
     sps[2].set_xlabel("$CRR_{m7.5}$")
     sps[2].set_xlim([0, 1.])
 
@@ -172,15 +242,3 @@ def make_bi2014_outputs_plot(sps, bi2014):
     sps[3].set_xlim([0, xlim[1]])
 
     sps[0].set_ylabel("Depth [m]")
-
-    plt.tight_layout()
-#
-# bf, sps = plt.subplots()
-# from matplotlib.patches import Rectangle
-#
-# for i, i_c in enumerate(IC_COLORS):
-#     print(i)
-#     rect = Rectangle((i, i), i + 1, i + 1, color=IC_COLORS[i_c])
-#     sps.add_patch(rect)
-# sps.plot(np.arange(5), np.arange(5))
-# plt.show()

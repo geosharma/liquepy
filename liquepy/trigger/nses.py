@@ -1,7 +1,5 @@
 import numpy as np
 import eqsig
-import scipy.integrate
-import scipy.interpolate
 
 
 def calc_energy_ratio_w_time(xi, total_time, time, av_period):
@@ -12,7 +10,7 @@ def calc_energy_ratio_w_time(xi, total_time, time, av_period):
 
 
 def est_case_1d_millen_et_al_2019(sp, asig, depth, xi, g_mod_red=1.0, trim=False, start=False, period=0.5, exact=False,
-                                   in_loc=1, g_scale_limit=1e3, nodal=True):
+                                   in_loc=1, g_scale_limit=1e3, nodal=True, cace=True):
     """
     Calculates the Cumulative absolute change in strain energy according to Millen et al. (2019)
 
@@ -43,7 +41,7 @@ def est_case_1d_millen_et_al_2019(sp, asig, depth, xi, g_mod_red=1.0, trim=False
 
     :return:
     """
-
+    from scipy.interpolate import interp1d
     sp.gen_split(props=['shear_vel', 'unit_mass'], target=0.25)
     dis_depths = np.cumsum(sp.split["thickness"])
     split_depths = np.cumsum(sp.split["thickness"])
@@ -57,8 +55,8 @@ def est_case_1d_millen_et_al_2019(sp, asig, depth, xi, g_mod_red=1.0, trim=False
     time_at_depth = np.interp(depth, dis_depths, dis_time_from_surface)
     total_time = dis_time_from_surface[-1]
 
-    vs = scipy.interpolate.interp1d(dis_depths[:-1], dis_shear_vel, kind='previous')(depth)
-    rho = scipy.interpolate.interp1d(dis_depths[:-1], sp.split["unit_mass"], kind='previous')(depth)
+    vs = interp1d(dis_depths[:-1], dis_shear_vel, kind='previous', fill_value='extrapolate')(depth)
+    rho = interp1d(dis_depths[:-1], sp.split["unit_mass"], kind='previous', fill_value='extrapolate')(depth)
 
     g_mod = vs ** 2 * rho
 
@@ -80,8 +78,13 @@ def est_case_1d_millen_et_al_2019(sp, asig, depth, xi, g_mod_red=1.0, trim=False
             soil_in = sp.get_soil_at_depth(sp.height)
             stt = total_time
         down_red = np.exp(-xi * time_at_depth * 2 * np.pi / period) ** 2 * surf_reduction
-        spectra_series = eqsig.surface.calc_cum_abs_surface_energy(asig, time_at_depth, up_red=up_red,
+        if cace:
+            spectra_series = eqsig.surface.calc_cum_abs_surface_energy(asig, time_at_depth, up_red=up_red,
                                                                    down_red=down_red, trim=trim, nodal=nodal, stt=stt)
+        else:
+            spectra_series = eqsig.surface.calc_surface_energy(asig, time_at_depth, up_red=up_red,
+                                                                       down_red=down_red, trim=trim, nodal=nodal,
+                                                                       stt=stt)
         spectra_series = np.asarray(spectra_series)
     else:
         red_at_surf = calc_energy_ratio_w_time(xi, total_time, 0, av_period=period)
@@ -93,16 +96,25 @@ def est_case_1d_millen_et_al_2019(sp, asig, depth, xi, g_mod_red=1.0, trim=False
             soil_in = sp.get_soil_at_depth(sp.height)
             red_ratio = red_at_surf + (1 - red_at_surf) / 2 * time_at_depth / total_time
             stt = total_time
-        spectra_series = eqsig.surface.calc_cum_abs_surface_energy(asig, time_at_depth, trim=trim, nodal=nodal, stt=stt,
+        if cace:
+            spectra_series = eqsig.surface.calc_cum_abs_surface_energy(asig, time_at_depth, trim=trim, nodal=nodal, stt=stt,
                                                                    start=start)
-        spectra_series = red_ratio[:, np.newaxis] * np.asarray(spectra_series)
+        else:
+            spectra_series = eqsig.surface.calc_surface_energy(asig, time_at_depth, trim=trim, nodal=nodal, stt=stt, start=start)
+        if hasattr(red_ratio, '__len__'):
+            spectra_series = red_ratio[:, np.newaxis] * np.asarray(spectra_series)
+        else:
+            spectra_series *= red_ratio
     rho_in = soil_in.unit_dry_weight / 9.8
     g_in = np.interp(in_depth, split_depths, split_g_mod)
     g_scale = (g_mod / g_in)
     if not nodal:
         g_scale_limit = 1.0
     g_scale = np.clip(g_scale, 1.0 / g_scale_limit, g_scale_limit)  # simple scaling from Millen et al. (2019)
-    estimate = spectra_series * rho_in / g_scale[:, np.newaxis]
+    if hasattr(g_scale, '__len__'):
+        estimate = spectra_series * rho_in / g_scale[:, np.newaxis]
+    else:
+        estimate = spectra_series * rho_in / g_scale
     return estimate
 
 
@@ -190,6 +202,7 @@ class TimeShiftProfile(object):  # Under development
         return up_amp_red, down_amp_red, total_red
 
     def get_unit_energy_series(self, xi, energy):
+        from scipy.integrate import cumtrapz
         e_str = "{0}-{1}".format(xi, energy)
         if e_str in self.e_cache:
             return self.e_cache[e_str]
@@ -199,7 +212,7 @@ class TimeShiftProfile(object):  # Under development
             acc_series = down_amp_red * self.down_waves + up_amp_red * self.up_wave
         else:
             acc_series = - down_amp_red[:, np.newaxis] * self.down_waves + up_amp_red[:, np.newaxis] * self.up_wave
-        velocity = scipy.integrate.cumtrapz(acc_series, dx=self.asig.dt, initial=0)
+        velocity = cumtrapz(acc_series, dx=self.asig.dt, initial=0)
         unit_kinetic_energy = 0.5 * velocity * np.abs(velocity) * total_red[:, np.newaxis]
         self.e_cache[e_str] = unit_kinetic_energy
         return unit_kinetic_energy
